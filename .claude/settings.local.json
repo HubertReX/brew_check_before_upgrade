@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./brew-release_notes.sh:*)",
+      "Bash(chmod:*)",
+      "Bash(git add:*)",
+      "Bash(brew:*)",
+      "Bash(claude /doctor)"
+    ],
+    "deny": []
+  }
+}
