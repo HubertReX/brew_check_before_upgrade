@@ -5,7 +5,8 @@
       "Bash(chmod:*)",
       "Bash(git add:*)",
       "Bash(brew:*)",
-      "Bash(claude /doctor)"
+      "Bash(claude /doctor)",
+      "Bash(mkdir:*)"
     ],
     "deny": []
   }
