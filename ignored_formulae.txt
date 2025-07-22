@@ -1,0 +1,15 @@
+/dev/fd/63
+certifi
+cmake
+dotnet@8
+libaec
+libomp
+libpng
+libupnp
+llama.cpp
+llvm
+pixman
+python@3.13
+vulkan-headers
+vulkan-loader
+z3
