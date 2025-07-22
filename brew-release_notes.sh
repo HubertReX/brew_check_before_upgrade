@@ -20,16 +20,17 @@ Requirements:
   - GitHub CLI (gh)
   - jq
   - gum (https://github.com/charmbracelet/gum)
+  - curl (for GitLab support)
 
 Ignored packages file: 'ignored_formulae.txt'.
 Results are saved in a new directory named 'reports_YYYY-MM-DD_HH:MM:SS'.
 EOF
 }
 
-# Checks if all required tools (brew, gh, jq, gum) are installed.
+# Checks if all required tools (brew, gh, jq, gum, curl) are installed.
 check_dependencies() {
   local missing_deps=0
-  for cmd in brew gh jq gum; do
+  for cmd in brew gh jq gum curl; do
     if ! command -v "$cmd" &>/dev/null; then
       echo "⛔ ERROR: Required tool '$cmd' is not installed." >&2
       missing_deps=1
@@ -44,35 +45,54 @@ get_repo_path() {
   local package_info
   local homepage_url
   local stable_url
+  local head_url
   local repo_path=""
   
   # Try as formula first
   if package_info=$(brew info --json=v2 --formula "$package" 2>/dev/null) && [ "$(echo "$package_info" | jq -r '.formulae | length')" -gt 0 ]; then
     homepage_url=$(echo "$package_info" | jq -r '.formulae[0].homepage')
     stable_url=$(echo "$package_info" | jq -r '.formulae[0].urls.stable.url')
+    head_url=$(echo "$package_info" | jq -r '.formulae[0].urls.head.url')
   # Try as cask if formula failed
   elif package_info=$(brew info --json=v2 --cask "$package" 2>/dev/null) && [ "$(echo "$package_info" | jq -r '.casks | length')" -gt 0 ]; then
     homepage_url=$(echo "$package_info" | jq -r '.casks[0].homepage')
     stable_url=""  # Casks don't have stable URLs in the same way
+    head_url=""    # Casks don't have head URLs
   else
     echo "⚠️ WARNING: Could not get info for package '$package'." >&2
     return 1
   fi
 
+  # Check for GitHub repositories
   if [[ "$homepage_url" == "https://github.com/"* ]]; then
-    repo_path=$(echo "$homepage_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
+    repo_path="github.com/$(echo "$homepage_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)"
   elif [[ "$stable_url" == "https://github.com/"* ]]; then
-    repo_path=$(echo "$stable_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
+    repo_path="github.com/$(echo "$stable_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)"
+  elif [[ "$head_url" == "https://github.com/"* ]]; then
+    repo_path="github.com/$(echo "$head_url" | sed -e 's|https://github.com/||' -e 's|\.git$||' | cut -d'/' -f1,2)"
+  # Check for GitLab repositories (gitlab.com and gitlab.freedesktop.org)
+  elif [[ "$homepage_url" == "https://gitlab."* ]]; then
+    local gitlab_host=$(echo "$homepage_url" | sed -e 's|https://||' -e 's|/.*||')
+    repo_path="$gitlab_host/$(echo "$homepage_url" | sed -e "s|https://$gitlab_host/||" | cut -d'/' -f1,2)"
+  elif [[ "$stable_url" == "https://gitlab."* ]]; then
+    local gitlab_host=$(echo "$stable_url" | sed -e 's|https://||' -e 's|/.*||')
+    repo_path="$gitlab_host/$(echo "$stable_url" | sed -e "s|https://$gitlab_host/||" | cut -d'/' -f1,2)"
+  elif [[ "$head_url" == "https://gitlab."* ]]; then
+    local gitlab_host=$(echo "$head_url" | sed -e 's|https://||' -e 's|/.*||')
+    repo_path="$gitlab_host/$(echo "$head_url" | sed -e "s|https://$gitlab_host/||" -e 's|\.git$||' | cut -d'/' -f1,2)"
   fi
 
   if [ -n "$repo_path" ]; then
     echo "$repo_path"
     return 0
   else
-    echo "⚠️ WARNING: Could not automatically determine GitHub repository for '$package'." >&2
+    echo "⚠️ WARNING: Could not automatically determine GitHub/GitLab repository for '$package'." >&2
     echo "   - Checked homepage: $homepage_url" >&2
     if [ -n "$stable_url" ]; then
       echo "   - Checked stable URL: $stable_url" >&2
+    fi
+    if [ -n "$head_url" ]; then
+      echo "   - Checked head URL: $head_url" >&2
     fi
     return 1
   fi
@@ -93,11 +113,26 @@ generate_update_report() {
     echo "↪️  Skipped report generation for '$package'."
     return
   fi
-  echo "📦 GitHub repository: $repo_path"
+  echo "📦 Repository: $repo_path"
 
-  echo "📡 Fetching version list from GitHub..."
+  echo "📡 Fetching version list..."
   local all_tags
-  all_tags=$(gh release list --repo "$repo_path" --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
+  if [[ "$repo_path" == "github.com/"* ]]; then
+    local github_repo_path=${repo_path#github.com/}
+    all_tags=$(gh release list --repo "$github_repo_path" --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
+  elif [[ "$repo_path" == "gitlab."* ]]; then
+    local gitlab_host=$(echo "$repo_path" | cut -d'/' -f1)
+    local gitlab_repo_path=$(echo "$repo_path" | cut -d'/' -f2-)
+    local project_id=$(echo "$gitlab_repo_path" | sed 's/\//%2F/g')
+    # Try releases first, fall back to tags if no releases found
+    all_tags=$(curl -s "https://$gitlab_host/api/v4/projects/$project_id/releases" | jq -r '.[].tag_name' 2>/dev/null || echo "")
+    if [ -z "$all_tags" ]; then
+      all_tags=$(curl -s "https://$gitlab_host/api/v4/projects/$project_id/repository/tags" | jq -r '.[].name' 2>/dev/null || echo "")
+    fi
+  else
+    echo "⚠️ WARNING: Unsupported repository type for '$package'."
+    return
+  fi
 
   if [ -z "$all_tags" ]; then
     echo "⚠️ WARNING: No releases found in repository '$repo_path'."
@@ -137,7 +172,23 @@ generate_update_report() {
     
     echo "    - Fetching notes for version $original_tag..."
     local release_notes
-    release_notes=$(gh release view "$original_tag" --repo "$repo_path" --json body --jq '.body')
+    if [[ "$repo_path" == "github.com/"* ]]; then
+      local github_repo_path=${repo_path#github.com/}
+      release_notes=$(gh release view "$original_tag" --repo "$github_repo_path" --json body --jq '.body')
+    elif [[ "$repo_path" == "gitlab."* ]]; then
+      local gitlab_host=$(echo "$repo_path" | cut -d'/' -f1)
+      local gitlab_repo_path=$(echo "$repo_path" | cut -d'/' -f2-)
+      local project_id=$(echo "$gitlab_repo_path" | sed 's/\//%2F/g')
+      # Try getting release notes first
+      release_notes=$(curl -s "https://$gitlab_host/api/v4/projects/$project_id/releases/$original_tag" | jq -r '.description' 2>/dev/null || echo "")
+      if [ "$release_notes" = "null" ] || [ -z "$release_notes" ]; then
+        # Fall back to commit message for the tag
+        release_notes=$(curl -s "https://$gitlab_host/api/v4/projects/$project_id/repository/tags/$original_tag" | jq -r '.commit.message' 2>/dev/null || echo "")
+        if [ "$release_notes" = "null" ]; then
+          release_notes=""
+        fi
+      fi
+    fi
 
     {
       echo "---"
