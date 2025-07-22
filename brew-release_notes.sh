@@ -136,6 +136,7 @@ generate_update_report() {
   local all_tags
   if [[ "$repo_path" == "github.com/"* ]]; then
     local github_repo_path=${repo_path#github.com/}
+    github_repo_path=${github_repo_path%.git}
     all_tags=$(gh release list --repo "$github_repo_path" --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
   elif [[ "$repo_path" == "gitlab."* ]]; then
     local gitlab_host=$(echo "$repo_path" | cut -d'/' -f1)
@@ -191,6 +192,7 @@ generate_update_report() {
     local release_notes
     if [[ "$repo_path" == "github.com/"* ]]; then
       local github_repo_path=${repo_path#github.com/}
+      github_repo_path=${github_repo_path%.git}
       release_notes=$(gh release view "$original_tag" --repo "$github_repo_path" --json body --jq '.body')
     elif [[ "$repo_path" == "gitlab."* ]]; then
       local gitlab_host=$(echo "$repo_path" | cut -d'/' -f1)
