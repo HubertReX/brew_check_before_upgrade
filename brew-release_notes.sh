@@ -3,6 +3,9 @@
 # Sets "fail-fast" mode for undefined variables and pipeline errors.
 set -uo pipefail
 
+# Guard variable to prevent automatic execution when sourcing for testing
+BREW_RELEASE_NOTES_SOURCED=${BREW_RELEASE_NOTES_SOURCED:-false}
+
 # Global variable for log file path
 LOG_FILE=""
 
@@ -338,5 +341,8 @@ main() {
 }
 
 # Run the main script function with all arguments passed through.
-main "$@"
+# Only execute main if not being sourced for testing
+if [[ "$BREW_RELEASE_NOTES_SOURCED" != "true" ]]; then
+    main "$@"
+fi
 

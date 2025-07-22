@@ -45,6 +45,8 @@ gh auth login
 
 ### Usage
 
+#### Normal Execution
+
 Run the script to check for outdated formulae and generate reports:
 
 ```bash
@@ -56,6 +58,32 @@ The script will:
 2. Allow you to interactively select which formulae to ignore
 3. Generate detailed Markdown reports for the remaining formulae
 4. Save reports in a timestamped directory (e.g., `reports_2025-01-22_14:30:45/`)
+
+#### Testing and Debugging
+
+For development and testing individual functions, you can source the script without triggering the full execution:
+
+```bash
+# Source the script for testing (prevents automatic execution)
+BREW_RELEASE_NOTES_SOURCED=true source brew-release_notes.sh
+
+# Now you can test individual functions:
+get_repo_path "git"                    # Test repository path extraction
+check_dependencies                     # Test dependency validation
+log_message "Test message"             # Test logging functionality
+
+# Example: Test repository detection for a specific package
+get_repo_path "node"
+# Output: github.com/nodejs/node
+
+# Example: Generate a report for a single package
+generate_update_report "git" "2.43.0" "2.44.0" "test_report.md"
+```
+
+This approach is particularly useful for:
+- **Quick function testing** without waiting for the full 2+ minute execution
+- **Debugging specific functionality** like repository path extraction
+- **Development workflows** when modifying individual functions
 
 ## 📖 How It Works
 
