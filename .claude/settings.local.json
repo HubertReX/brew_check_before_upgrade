@@ -6,7 +6,11 @@
       "Bash(git add:*)",
       "Bash(brew:*)",
       "Bash(claude /doctor)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(git commit:*)",
+      "Bash(source:*)",
+      "Bash(get_repo_path:*)",
+      "Bash(curl:*)"
     ],
     "deny": []
   }
