@@ -1,4 +1,4 @@
-2#!/bin/bash
+#!/bin/bash
 
 # Sets "fail-fast" mode for undefined variables and pipeline errors.
 set -uo pipefail
@@ -22,7 +22,7 @@ Requirements:
   - gum (https://github.com/charmbracelet/gum)
 
 Ignored formulae file: 'ignored_formulae.txt'.
-Results are saved in a new directory named 'reports_YYYYMMDD_HHMMSS'.
+Results are saved in a new directory named 'reports_YYYY-MM-DD_HH:MM:SS'.
 EOF
 }
 
@@ -84,7 +84,7 @@ generate_update_report() {
 
   echo "📡 Fetching version list from GitHub..."
   local all_tags
-  all_tags=$(gh release list --repo "$repo_path" --limit 200 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
+  all_tags=$(gh release list --repo "$repo_path" --limit 50 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
 
   if [ -z "$all_tags" ]; then
     echo "⚠️ WARNING: No releases found in repository '$repo_path'."
@@ -198,7 +198,7 @@ main() {
     exit 0
   fi
 
-  local out_dir="reports_$(date +"%Y%m%d_%H%M%S")"
+  local out_dir="reports_$(date +"%Y-%m-%d_%H:%M:%S")"
   mkdir -p "$out_dir"
   echo "-i- Reports will be saved in directory: $out_dir"
 
