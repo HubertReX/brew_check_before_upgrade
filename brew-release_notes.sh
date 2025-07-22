@@ -1,7 +1,6 @@
-#!/bin/bash
+2#!/bin/bash
 
 # Ustawia tryb "fail-fast" dla niezdefiniowanych zmiennych i błędów w potoku.
-# Opcja -e została usunięta, aby pozwolić na elastyczną obsługę błędów.
 set -uo pipefail
 
 # --- Główne Funkcje ---
@@ -12,23 +11,25 @@ usage() {
 Użycie: $(basename "$0")
 
 Ten skrypt sprawdza, które z zainstalowanych formuł Homebrew są nieaktualne,
-a następnie dla każdej z nich generuje raport w formacie Markdown. Raport
-zawiera notatki z wydań (release notes) dla wszystkich wersji pomiędzy
-zainstalowaną a najnowszą dostępną.
+pozwala interaktywnie zarządzać listą ignorowanych formuł, a następnie
+dla pozostałych generuje raport w formacie Markdown. Raport zawiera notatki
+z wydań (release notes).
 
 Wymagania:
   - Homebrew (brew)
   - GitHub CLI (gh)
   - jq
+  - gum (https://github.com/charmbracelet/gum)
 
+Plik z ignorowanymi formułami: 'ignored_formulae.txt'.
 Wyniki są zapisywane w nowym katalogu o nazwie 'raporty_YYYYMMDD_HHMMSS'.
 EOF
 }
 
-# Sprawdza, czy wszystkie wymagane narzędzia (brew, gh, jq) są zainstalowane.
+# Sprawdza, czy wszystkie wymagane narzędzia (brew, gh, jq, gum) są zainstalowane.
 check_dependencies() {
   local missing_deps=0
-  for cmd in brew gh jq; do
+  for cmd in brew gh jq gum; do
     if ! command -v "$cmd" &>/dev/null; then
       echo "⛔ BŁĄD: Wymagane narzędzie '$cmd' nie jest zainstalowane." >&2
       missing_deps=1
@@ -38,32 +39,19 @@ check_dependencies() {
 }
 
 # Pobiera ścieżkę do repozytorium GitHub na podstawie nazwy formuły.
-# Próbuje znaleźć ją najpierw w 'homepage', a potem w 'urls.stable.url'.
-# Zwraca ścieżkę w formacie 'wlasciciel/repozytorium'.
 get_repo_path() {
   local formula="$1"
-  
-  # Pobieramy oba potencjalne adresy URL za jednym razem
   local formula_info
   formula_info=$(brew info --json=v2 --formula "$formula")
-  
   local homepage_url
   homepage_url=$(echo "$formula_info" | jq -r '.formulae[0].homepage')
-  
   local stable_url
   stable_url=$(echo "$formula_info" | jq -r '.formulae[0].urls.stable.url')
-  
   local repo_path=""
 
-  # 1. Sprawdzamy pole 'homepage'
   if [[ "$homepage_url" == "https://github.com/"* ]]; then
-    # Usuwa prefix "https://github.com/" i ewentualne końcowe ukośniki
     repo_path=$(echo "$homepage_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
-  
-  # 2. Jeśli nie, sprawdzamy pole 'stable.url'
   elif [[ "$stable_url" == "https://github.com/"* ]]; then
-    # Wyciąga 'wlasciciel/repozytorium' z bardziej złożonych URLi, np. do archiwów
-    # repo_path=$(echo "$stable_url" | sed -n 's|.*github.com/\([^/]\+/[^/]\+\).*|\1|p')
     repo_path=$(echo "$stable_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
   fi
 
@@ -79,7 +67,6 @@ get_repo_path() {
 }
 
 # Generuje raport zmian w formacie Markdown dla pojedynczej formuły.
-# Argumenty: 1: nazwa formuły, 2: zainstalowana wersja, 3: ścieżka do pliku wyjściowego.
 generate_update_report() {
   local formula="$1"
   local installed_version="$2"
@@ -97,7 +84,6 @@ generate_update_report() {
 
   echo "📡 Pobieranie listy wersji z GitHub..."
   local all_tags
-  # Pobieramy do 200 ostatnich wydań, ignorując wersje pre-release.
   all_tags=$(gh release list --repo "$repo_path" --limit 200 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
 
   if [ -z "$all_tags" ]; then
@@ -105,11 +91,6 @@ generate_update_report() {
     return
   fi
 
-  # Logika do znalezienia nowszych wersji:
-  # 1. Tworzymy listę łączącą wersję zainstalowaną i wszystkie tagi.
-  # 2. Usuwamy prefiks 'v' z tagów dla spójnego sortowania.
-  # 3. Sortujemy wersje za pomocą `sort -V` (sortowanie numerów wersji).
-  # 4. Używamy `awk` do znalezienia linii z naszą wersją i wydrukowania wszystkich kolejnych.
   local versions_to_fetch
   versions_to_fetch=$(printf "%s\n%s" "$installed_version" "$all_tags" | sed 's/^v//' | sort -V | uniq | awk -v ver="$installed_version" '$0 == ver {p=1; next} p')
 
@@ -132,9 +113,7 @@ generate_update_report() {
     echo ""
   } > "$output_file"
 
-  # Iterujemy po nowszych wersjach, od najnowszej do najstarszej.
   while IFS= read -r version; do
-    # Znajdujemy oryginalny tag (z 'v' lub bez), który pasuje do numeru wersji.
     local original_tag
     original_tag=$(echo "$all_tags" | grep -E "^v?${version}$" | head -n 1)
 
@@ -144,7 +123,6 @@ generate_update_report() {
     fi
     
     echo "    - Pobieranie notatek dla wersji $original_tag..."
-
     local release_notes
     release_notes=$(gh release view "$original_tag" --repo "$repo_path" --json body --jq '.body')
 
@@ -152,7 +130,6 @@ generate_update_report() {
       echo "---"
       echo "## 🏷️ Wersja: $original_tag"
       echo ""
-      # Jeśli notatki są puste, dodajemy stosowny komunikat.
       if [ -z "$release_notes" ]; then
         echo "*Brak notatek z wydania dla tej wersji.*"
       else
@@ -160,16 +137,13 @@ generate_update_report() {
       fi
       echo ""
     } >> "$output_file"
-
-  done < <(echo "$versions_to_fetch" | sort -Vr) # sort -Vr odwraca kolejność sortowania
+  done < <(echo "$versions_to_fetch" | sort -Vr)
 
   echo "✅ Gotowe! Raport został zapisany w pliku: $output_file"
 }
 
 # --- Główna Logika Skryptu ---
-
 main() {
-  # Jeśli podano argument -h lub --help, wyświetl pomoc.
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
@@ -177,8 +151,10 @@ main() {
   
   check_dependencies
   
+  local ignored_file="ignored_formulae.txt"
+  touch "$ignored_file"
+
   echo "-i- Sprawdzanie nieaktualnych formuł Homebrew..."
-  # Używamy `brew outdated` z wyjściem JSON, aby uzyskać listę przestarzałych formuł.
   local outdated_formulae
   outdated_formulae=$(brew outdated --formulae --json | jq -r '.formulae[] | "\(.name);\(.installed_versions[0])"')
 
@@ -187,20 +163,52 @@ main() {
     exit 0
   fi
 
+  # Wyodrębniamy same nazwy formuł, aby porównać je z listą ignorowanych
+  local outdated_names
+  outdated_names=$(echo "$outdated_formulae" | cut -d';' -f1)
+
+  # Filtrujemy, aby znaleźć formuły, które nie są jeszcze ignorowane
+  local candidates_to_ignore
+  candidates_to_ignore=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names"))
+
+  if [ -n "$candidates_to_ignore" ]; then
+    echo "-i- Znaleziono nieaktualne formuły, których nie ma na liście ignorowanych."
+    local newly_ignored
+    # Używamy gum do interaktywnego wyboru
+    newly_ignored=$(gum choose --no-limit --header "Wybierz formuły, które chcesz dodać do listy ignorowanych:" <<< "$candidates_to_ignore")
+    
+    if [ -n "$newly_ignored" ]; then
+      echo "$newly_ignored" >> "$ignored_file"
+      # Sortujemy i usuwamy duplikaty, aby utrzymać porządek w pliku
+      sort -u -o "$ignored_file" "$ignored_file"
+      echo "✅ Zaktualizowano plik '$ignored_file'."
+    fi
+  fi
+  
+  # Filtrujemy ostateczną listę formuł do przetworzenia
+  local formulae_to_process
+  # Używamy `grep` z opcją -v (odwrócenie), -x (całe linie), -f (plik ze wzorcami)
+  formulae_to_process=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names") | while read -r name; do
+    # Przywracamy pełne informacje (nazwa;wersja) dla pasujących formuł
+    echo "$outdated_formulae" | grep "^${name};"
+  done)
+
+  if [ -z "$formulae_to_process" ]; then
+    echo "✅ Wszystkie nieaktualne formuły znajdują się na liście ignorowanych. Brak raportów do wygenerowania."
+    exit 0
+  fi
+
   local out_dir="raporty_$(date +"%Y%m%d_%H%M%S")"
   mkdir -p "$out_dir"
   echo "-i- Raporty zostaną zapisane w katalogu: $out_dir"
 
-  # Przetwarzamy każdą nieaktualną formułę.
   while IFS=';' read -r name installed_version; do
-    # Zastępujemy ukośniki w nazwie formuły, aby uniknąć problemów z systemem plików.
     local sanitized_name
     sanitized_name=$(echo "$name" | tr '/' '-')
     local filename="$out_dir/${sanitized_name}_od_${installed_version}.md"
     
     generate_update_report "$name" "$installed_version" "$filename"
-
-  done <<< "$outdated_formulae"
+  done <<< "$formulae_to_process"
 
   echo "--------------------------------------------------"
   echo "🏁 Wszystkie operacje zakończone."
@@ -208,3 +216,4 @@ main() {
 
 # Uruchomienie głównej funkcji skryptu z przekazaniem wszystkich argumentów.
 main "$@"
+
