@@ -1,8 +1,7 @@
 #!/bin/bash
 
-# Ustawia tryb "fail-fast", aby skrypt przerywał działanie w przypadku błędu,
-# niezdefiniowanej zmiennej lub błędu w potoku poleceń.
-# set -euo pipefail
+# Ustawia tryb "fail-fast" dla niezdefiniowanych zmiennych i błędów w potoku.
+# Opcja -e została usunięta, aby pozwolić na elastyczną obsługę błędów.
 set -uo pipefail
 
 # --- Główne Funkcje ---
@@ -29,33 +28,52 @@ EOF
 # Sprawdza, czy wszystkie wymagane narzędzia (brew, gh, jq) są zainstalowane.
 check_dependencies() {
   local missing_deps=0
-  echo before
   for cmd in brew gh jq; do
     if ! command -v "$cmd" &>/dev/null; then
-      echo "⛔ BŁĄD: Wymagane narzędzie '$cmd' nie jest zainstalowane." 
+      echo "⛔ BŁĄD: Wymagane narzędzie '$cmd' nie jest zainstalowane." >&2
       missing_deps=1
     fi
   done
-  echo Test: $missing_deps
   [ "$missing_deps" -eq 1 ] && exit 1
 }
 
 # Pobiera ścieżkę do repozytorium GitHub na podstawie nazwy formuły.
+# Próbuje znaleźć ją najpierw w 'homepage', a potem w 'urls.stable.url'.
 # Zwraca ścieżkę w formacie 'wlasciciel/repozytorium'.
 get_repo_path() {
   local formula="$1"
-  local repo_url
   
-  # Używamy `brew info` do znalezienia URL strony głównej, która jest najbardziej
-  # wiarygodnym źródłem informacji o repozytorium.
-  repo_url=$(brew info --json=v2 --formula "$formula" | jq -r '.formulae[0].homepage')
+  # Pobieramy oba potencjalne adresy URL za jednym razem
+  local formula_info
+  formula_info=$(brew info --json=v2 --formula "$formula")
+  
+  local homepage_url
+  homepage_url=$(echo "$formula_info" | jq -r '.formulae[0].homepage')
+  
+  local stable_url
+  stable_url=$(echo "$formula_info" | jq -r '.formulae[0].urls.stable.url')
+  
+  local repo_path=""
 
-  # Weryfikujemy, czy URL pochodzi z GitHub i wyciągamy ścieżkę.
-  if [[ "$repo_url" == "https://github.com/"* ]]; then
-    # Usuwa prefix "https://github.com/" i ewentualne końcowe ukośniki.
-    echo "$repo_url" | sed -e 's|https://github.com/||' -e 's|/$||'
+  # 1. Sprawdzamy pole 'homepage'
+  if [[ "$homepage_url" == "https://github.com/"* ]]; then
+    # Usuwa prefix "https://github.com/" i ewentualne końcowe ukośniki
+    repo_path=$(echo "$homepage_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
+  
+  # 2. Jeśli nie, sprawdzamy pole 'stable.url'
+  elif [[ "$stable_url" == "https://github.com/"* ]]; then
+    # Wyciąga 'wlasciciel/repozytorium' z bardziej złożonych URLi, np. do archiwów
+    # repo_path=$(echo "$stable_url" | sed -n 's|.*github.com/\([^/]\+/[^/]\+\).*|\1|p')
+    repo_path=$(echo "$stable_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
+  fi
+
+  if [ -n "$repo_path" ]; then
+    echo "$repo_path"
+    return 0
   else
-    echo "⚠️ OSTRZEŻENIE: Nie udało się automatycznie ustalić repozytorium GitHub dla '$formula' ze strony głównej: $repo_url" >&2
+    echo "⚠️ OSTRZEŻENIE: Nie udało się automatycznie ustalić repozytorium GitHub dla '$formula'." >&2
+    echo "   - Sprawdzony homepage: $homepage_url" >&2
+    echo "   - Sprawdzony stable URL: $stable_url" >&2
     return 1
   fi
 }
@@ -190,4 +208,3 @@ main() {
 
 # Uruchomienie głównej funkcji skryptu z przekazaniem wszystkich argumentów.
 main "$@"
-
