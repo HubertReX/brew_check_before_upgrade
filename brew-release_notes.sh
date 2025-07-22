@@ -82,7 +82,8 @@ get_repo_path() {
 generate_update_report() {
   local package="$1"
   local installed_version="$2"
-  local output_file="$3"
+  local latest_version="$3"
+  local output_file="$4"
 
   echo "--------------------------------------------------"
   echo "🔎 Processing package: $package (version: $installed_version)"
@@ -96,7 +97,7 @@ generate_update_report() {
 
   echo "📡 Fetching version list from GitHub..."
   local all_tags
-  all_tags=$(gh release list --repo "$repo_path" --limit 50 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
+  all_tags=$(gh release list --repo "$repo_path" --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
 
   if [ -z "$all_tags" ]; then
     echo "⚠️ WARNING: No releases found in repository '$repo_path'."
@@ -247,11 +248,21 @@ main() {
   echo "📂 Reports will be saved in directory: $out_dir"
 
   while IFS=';' read -r name installed_version; do
+    echo "🔍 Getting latest version for $name..."
+    local latest_version
+    latest_version=$(brew info --json=v2 --formula "$name" 2>/dev/null | jq -r '.formulae[0].versions.stable' || \
+                    brew info --json=v2 --cask "$name" 2>/dev/null | jq -r '.casks[0].version')
+    
+    if [ -z "$latest_version" ] || [ "$latest_version" = "null" ]; then
+      echo "⚠️ Could not determine latest version for $name, using 'latest'"
+      latest_version="latest"
+    fi
+    
     local sanitized_name
     sanitized_name=$(echo "$name" | tr '/' '-')
-    local filename="$out_dir/${sanitized_name}_from_${installed_version}.md"
+    local filename="$out_dir/${sanitized_name}_from_${installed_version}_to_${latest_version}.md"
     
-    generate_update_report "$name" "$installed_version" "$filename"
+    generate_update_report "$name" "$installed_version" "$latest_version" "$filename"
   done <<< "$packages_to_process"
 
   echo "--------------------------------------------------"
