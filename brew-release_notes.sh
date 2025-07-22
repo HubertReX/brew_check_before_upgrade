@@ -3,6 +3,20 @@
 # Sets "fail-fast" mode for undefined variables and pipeline errors.
 set -uo pipefail
 
+# Global variable for log file path
+LOG_FILE=""
+
+# --- Logging Functions ---
+
+# Writes message to both console and log file
+log_message() {
+  local message="$1"
+  echo "$message"
+  if [ -n "$LOG_FILE" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $message" >> "$LOG_FILE"
+  fi
+}
+
 # --- Main Functions ---
 
 # Displays the script usage instructions.
@@ -32,7 +46,7 @@ check_dependencies() {
   local missing_deps=0
   for cmd in brew gh jq gum curl; do
     if ! command -v "$cmd" &>/dev/null; then
-      echo "⛔ ERROR: Required tool '$cmd' is not installed." >&2
+      log_message "⛔ ERROR: Required tool '$cmd' is not installed." >&2
       missing_deps=1
     fi
   done
@@ -59,7 +73,7 @@ get_repo_path() {
     stable_url=""  # Casks don't have stable URLs in the same way
     head_url=""    # Casks don't have head URLs
   else
-    echo "⚠️ WARNING: Could not get info for package '$package'." >&2
+    log_message "⚠️ WARNING: Could not get info for package '$package'." >&2
     return 1
   fi
 
@@ -86,13 +100,13 @@ get_repo_path() {
     echo "$repo_path"
     return 0
   else
-    echo "⚠️ WARNING: Could not automatically determine GitHub/GitLab repository for '$package'." >&2
-    echo "   - Checked homepage: $homepage_url" >&2
+    log_message "⚠️ WARNING: Could not automatically determine GitHub/GitLab repository for '$package'." >&2
+    log_message "   - Checked homepage: $homepage_url" >&2
     if [ -n "$stable_url" ]; then
-      echo "   - Checked stable URL: $stable_url" >&2
+      log_message "   - Checked stable URL: $stable_url" >&2
     fi
     if [ -n "$head_url" ]; then
-      echo "   - Checked head URL: $head_url" >&2
+      log_message "   - Checked head URL: $head_url" >&2
     fi
     return 1
   fi
@@ -105,17 +119,17 @@ generate_update_report() {
   local latest_version="$3"
   local output_file="$4"
 
-  echo "--------------------------------------------------"
-  echo "🔎 Processing package: $package (version: $installed_version)"
+  log_message "--------------------------------------------------"
+  log_message "🔎 Processing package: $package (version: $installed_version)"
 
   local repo_path
   if ! repo_path=$(get_repo_path "$package"); then
-    echo "↪️  Skipped report generation for '$package'."
+    log_message "↪️  Skipped report generation for '$package'."
     return
   fi
-  echo "📦 Repository: $repo_path"
+  log_message "📦 Repository: $repo_path"
 
-  echo "📡 Fetching version list..."
+  log_message "📡 Fetching version list..."
   local all_tags
   if [[ "$repo_path" == "github.com/"* ]]; then
     local github_repo_path=${repo_path#github.com/}
@@ -130,12 +144,12 @@ generate_update_report() {
       all_tags=$(curl -s "https://$gitlab_host/api/v4/projects/$project_id/repository/tags" | jq -r '.[].name' 2>/dev/null || echo "")
     fi
   else
-    echo "⚠️ WARNING: Unsupported repository type for '$package'."
+    log_message "⚠️ WARNING: Unsupported repository type for '$package'."
     return
   fi
 
   if [ -z "$all_tags" ]; then
-    echo "⚠️ WARNING: No releases found in repository '$repo_path'."
+    log_message "⚠️ WARNING: No releases found in repository '$repo_path'."
     return
   fi
 
@@ -143,13 +157,13 @@ generate_update_report() {
   versions_to_fetch=$(printf "%s\n%s" "$installed_version" "$all_tags" | sed 's/^v//' | sort -V | uniq | awk -v ver="$installed_version" '$0 == ver {p=1; next} p')
 
   if [ -z "$versions_to_fetch" ]; then
-    echo "🎉 Package '$package' is up to date. No need to generate a report."
+    log_message "🎉 Package '$package' is up to date. No need to generate a report."
     return
   fi
   
   local versions_count
   versions_count=$(echo "$versions_to_fetch" | wc -l | xargs)
-  echo "✨ Found $versions_count newer versions. Generating report..."
+  log_message "✨ Found $versions_count newer versions. Generating report..."
 
   # --- Generating Markdown file ---
   {
@@ -166,11 +180,11 @@ generate_update_report() {
     original_tag=$(echo "$all_tags" | grep -E "^v?${version}$" | head -n 1)
 
     if [ -z "$original_tag" ]; then
-      echo "⚠️ Cannot find original tag for version '$version'."
+      log_message "⚠️ Cannot find original tag for version '$version'."
       continue
     fi
     
-    echo "    - Fetching notes for version $original_tag..."
+    log_message "    - Fetching notes for version $original_tag..."
     local release_notes
     if [[ "$repo_path" == "github.com/"* ]]; then
       local github_repo_path=${repo_path#github.com/}
@@ -203,7 +217,7 @@ generate_update_report() {
     } >> "$output_file"
   done < <(echo "$versions_to_fetch" | sort -Vr)
 
-  echo "✅ Done! Report saved to file: $output_file"
+  log_message "✅ Done! Report saved to file: $output_file"
 }
 
 # --- Main Script Logic ---
@@ -218,11 +232,11 @@ main() {
   local ignored_file="ignored_formulae.txt"
   touch "$ignored_file"
 
-  echo "🔍 Checking outdated Homebrew formulae..."
+  log_message "🔍 Checking outdated Homebrew formulae..."
   local outdated_formulae
   outdated_formulae=$(brew outdated --formulae --json | jq -r '.formulae[] | "\(.name);\(.installed_versions[0])"')
   
-  echo "🎯 Filtering for explicitly installed formulae only..."
+  log_message "🎯 Filtering for explicitly installed formulae only..."
   local explicitly_installed
   explicitly_installed=$(brew list --formulae --installed-on-request)
   
@@ -240,12 +254,12 @@ main() {
   
   outdated_formulae="$filtered_outdated"
 
-  echo "📦 Checking outdated Homebrew casks..."
+  log_message "📦 Checking outdated Homebrew casks..."
   local outdated_casks
   outdated_casks=$(brew outdated --cask --json | jq -r '.casks[] | "\(.name);\(.installed_versions[0])"')
   
   if [ -n "$outdated_casks" ]; then
-    echo "✨ All casks are treated as explicitly installed (no dependency filtering needed)..."
+    log_message "✨ All casks are treated as explicitly installed (no dependency filtering needed)..."
     # Combine formulae and casks
     if [ -n "$outdated_formulae" ]; then
       outdated_formulae="${outdated_formulae}\n${outdated_casks}"
@@ -255,7 +269,7 @@ main() {
   fi
 
   if [ -z "$outdated_formulae" ]; then
-    echo "🎉 All explicitly installed Homebrew formulae and casks are up to date. Congratulations!"
+    log_message "🎉 All explicitly installed Homebrew formulae and casks are up to date. Congratulations!"
     exit 0
   fi
 
@@ -268,7 +282,7 @@ main() {
   candidates_to_ignore=$(grep -v -x -f "$ignored_file" <(echo -e "$outdated_names"))
 
   if [ -n "$candidates_to_ignore" ]; then
-    echo "🔔 Found outdated packages not on the ignore list."
+    log_message "🔔 Found outdated packages not on the ignore list."
     local newly_ignored
     # Use gum for interactive selection
     newly_ignored=$(gum choose --no-limit --header "Select packages to add to the ignore list:" <<< "$candidates_to_ignore")
@@ -277,7 +291,7 @@ main() {
       echo "$newly_ignored" >> "$ignored_file"
       # Sort and remove duplicates to maintain file order
       sort -u -o "$ignored_file" "$ignored_file"
-      echo "✅ Updated file '$ignored_file'."
+      log_message "✅ Updated file '$ignored_file'."
     fi
   fi
   
@@ -290,22 +304,25 @@ main() {
   done)
 
   if [ -z "$packages_to_process" ]; then
-    echo "✅ All outdated packages are on the ignore list. No reports to generate."
+    log_message "✅ All outdated packages are on the ignore list. No reports to generate."
     exit 0
   fi
 
   local out_dir="reports_$(date +"%Y-%m-%d_%H:%M:%S")"
   mkdir -p "$out_dir"
+  LOG_FILE="$out_dir/script.log"
   echo "📂 Reports will be saved in directory: $out_dir"
+  log_message "📂 Reports will be saved in directory: $out_dir"
+  log_message "📝 Log file created: $LOG_FILE"
 
   while IFS=';' read -r name installed_version; do
-    echo "🔍 Getting latest version for $name..."
+    log_message "🔍 Getting latest version for $name..."
     local latest_version
     latest_version=$(brew info --json=v2 --formula "$name" 2>/dev/null | jq -r '.formulae[0].versions.stable' || \
                     brew info --json=v2 --cask "$name" 2>/dev/null | jq -r '.casks[0].version')
     
     if [ -z "$latest_version" ] || [ "$latest_version" = "null" ]; then
-      echo "⚠️ Could not determine latest version for $name, using 'latest'"
+      log_message "⚠️ Could not determine latest version for $name, using 'latest'"
       latest_version="latest"
     fi
     
@@ -316,8 +333,8 @@ main() {
     generate_update_report "$name" "$installed_version" "$latest_version" "$filename"
   done <<< "$packages_to_process"
 
-  echo "--------------------------------------------------"
-  echo "🏁 All operations completed."
+  log_message "--------------------------------------------------"
+  log_message "🏁 All operations completed."
 }
 
 # Run the main script function with all arguments passed through.
