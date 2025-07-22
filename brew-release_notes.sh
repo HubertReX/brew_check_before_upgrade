@@ -10,8 +10,8 @@ usage() {
   cat << EOF
 Usage: $(basename "$0")
 
-This script checks which installed Homebrew formulae are outdated,
-allows interactive management of the ignored formulae list, and then
+This script checks which explicitly installed Homebrew formulae and casks are outdated,
+allows interactive management of the ignored packages list, and then
 generates Markdown reports for the remaining ones. The report contains
 release notes.
 
@@ -21,7 +21,7 @@ Requirements:
   - jq
   - gum (https://github.com/charmbracelet/gum)
 
-Ignored formulae file: 'ignored_formulae.txt'.
+Ignored packages file: 'ignored_formulae.txt'.
 Results are saved in a new directory named 'reports_YYYY-MM-DD_HH:MM:SS'.
 EOF
 }
@@ -38,16 +38,26 @@ check_dependencies() {
   [ "$missing_deps" -eq 1 ] && exit 1
 }
 
-# Gets the GitHub repository path based on the formula name.
+# Gets the GitHub repository path based on the package name (formula or cask).
 get_repo_path() {
-  local formula="$1"
-  local formula_info
-  formula_info=$(brew info --json=v2 --formula "$formula")
+  local package="$1"
+  local package_info
   local homepage_url
-  homepage_url=$(echo "$formula_info" | jq -r '.formulae[0].homepage')
   local stable_url
-  stable_url=$(echo "$formula_info" | jq -r '.formulae[0].urls.stable.url')
   local repo_path=""
+  
+  # Try as formula first
+  if package_info=$(brew info --json=v2 --formula "$package" 2>/dev/null) && [ "$(echo "$package_info" | jq -r '.formulae | length')" -gt 0 ]; then
+    homepage_url=$(echo "$package_info" | jq -r '.formulae[0].homepage')
+    stable_url=$(echo "$package_info" | jq -r '.formulae[0].urls.stable.url')
+  # Try as cask if formula failed
+  elif package_info=$(brew info --json=v2 --cask "$package" 2>/dev/null) && [ "$(echo "$package_info" | jq -r '.casks | length')" -gt 0 ]; then
+    homepage_url=$(echo "$package_info" | jq -r '.casks[0].homepage')
+    stable_url=""  # Casks don't have stable URLs in the same way
+  else
+    echo "⚠️ WARNING: Could not get info for package '$package'." >&2
+    return 1
+  fi
 
   if [[ "$homepage_url" == "https://github.com/"* ]]; then
     repo_path=$(echo "$homepage_url" | sed -e 's|https://github.com/||' | cut -d'/' -f1,2)
@@ -59,25 +69,27 @@ get_repo_path() {
     echo "$repo_path"
     return 0
   else
-    echo "⚠️ WARNING: Could not automatically determine GitHub repository for '$formula'." >&2
+    echo "⚠️ WARNING: Could not automatically determine GitHub repository for '$package'." >&2
     echo "   - Checked homepage: $homepage_url" >&2
-    echo "   - Checked stable URL: $stable_url" >&2
+    if [ -n "$stable_url" ]; then
+      echo "   - Checked stable URL: $stable_url" >&2
+    fi
     return 1
   fi
 }
 
-# Generates a Markdown changelog report for a single formula.
+# Generates a Markdown changelog report for a single package (formula or cask).
 generate_update_report() {
-  local formula="$1"
+  local package="$1"
   local installed_version="$2"
   local output_file="$3"
 
   echo "--------------------------------------------------"
-  echo "🔎 Processing formula: $formula (version: $installed_version)"
+  echo "🔎 Processing package: $package (version: $installed_version)"
 
   local repo_path
-  if ! repo_path=$(get_repo_path "$formula"); then
-    echo "↪️  Skipped report generation for '$formula'."
+  if ! repo_path=$(get_repo_path "$package"); then
+    echo "↪️  Skipped report generation for '$package'."
     return
   fi
   echo "📦 GitHub repository: $repo_path"
@@ -95,7 +107,7 @@ generate_update_report() {
   versions_to_fetch=$(printf "%s\n%s" "$installed_version" "$all_tags" | sed 's/^v//' | sort -V | uniq | awk -v ver="$installed_version" '$0 == ver {p=1; next} p')
 
   if [ -z "$versions_to_fetch" ]; then
-    echo "🎉 Formula '$formula' is up to date. No need to generate a report."
+    echo "🎉 Package '$package' is up to date. No need to generate a report."
     return
   fi
   
@@ -105,7 +117,7 @@ generate_update_report() {
 
   # --- Generating Markdown file ---
   {
-    echo "# Update Report for: \`$formula\`"
+    echo "# Update Report for: \`$package\`"
     echo ""
     echo "**Generated:** $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
@@ -154,28 +166,60 @@ main() {
   local ignored_file="ignored_formulae.txt"
   touch "$ignored_file"
 
-  echo "-i- Checking outdated Homebrew formulae..."
+  echo "🔍 Checking outdated Homebrew formulae..."
   local outdated_formulae
   outdated_formulae=$(brew outdated --formulae --json | jq -r '.formulae[] | "\(.name);\(.installed_versions[0])"')
+  
+  echo "🎯 Filtering for explicitly installed formulae only..."
+  local explicitly_installed
+  explicitly_installed=$(brew list --formulae --installed-on-request)
+  
+  # Filter outdated formulae to include only those explicitly installed
+  local filtered_outdated=""
+  while IFS=';' read -r name version; do
+    if echo "$explicitly_installed" | grep -q "^${name}$"; then
+      if [ -n "$filtered_outdated" ]; then
+        filtered_outdated="${filtered_outdated}\n${name};${version}"
+      else
+        filtered_outdated="${name};${version}"
+      fi
+    fi
+  done <<< "$outdated_formulae"
+  
+  outdated_formulae="$filtered_outdated"
+
+  echo "📦 Checking outdated Homebrew casks..."
+  local outdated_casks
+  outdated_casks=$(brew outdated --cask --json | jq -r '.casks[] | "\(.name);\(.installed_versions[0])"')
+  
+  if [ -n "$outdated_casks" ]; then
+    echo "✨ All casks are treated as explicitly installed (no dependency filtering needed)..."
+    # Combine formulae and casks
+    if [ -n "$outdated_formulae" ]; then
+      outdated_formulae="${outdated_formulae}\n${outdated_casks}"
+    else
+      outdated_formulae="$outdated_casks"
+    fi
+  fi
 
   if [ -z "$outdated_formulae" ]; then
-    echo "🎉 All Homebrew formulae are up to date. Congratulations!"
+    echo "🎉 All explicitly installed Homebrew formulae and casks are up to date. Congratulations!"
     exit 0
   fi
 
-  # Extract formula names only to compare with ignored list
+  # Extract package names only to compare with ignored list
   local outdated_names
-  outdated_names=$(echo "$outdated_formulae" | cut -d';' -f1)
+  outdated_names=$(echo -e "$outdated_formulae" | cut -d';' -f1)
 
-  # Filter to find formulae that are not yet ignored
+  # Filter to find packages that are not yet ignored
   local candidates_to_ignore
-  candidates_to_ignore=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names"))
+  candidates_to_ignore=$(grep -v -x -f "$ignored_file" <(echo -e "$outdated_names"))
 
   if [ -n "$candidates_to_ignore" ]; then
-    echo "-i- Found outdated formulae not on the ignore list."
+    echo "🔔 Found outdated packages not on the ignore list."
     local newly_ignored
     # Use gum for interactive selection
-    newly_ignored=$(gum choose --no-limit --header "Select formulae to add to the ignore list:" <<< "$candidates_to_ignore")
+    newly_ignored=$(gum choose --no-limit --header "Select packages to add to the ignore list:" <<< "$candidates_to_ignore")
     
     if [ -n "$newly_ignored" ]; then
       echo "$newly_ignored" >> "$ignored_file"
@@ -185,22 +229,22 @@ main() {
     fi
   fi
   
-  # Filter final list of formulae to process
-  local formulae_to_process
+  # Filter final list of packages to process
+  local packages_to_process
   # Use `grep` with -v (invert), -x (whole lines), -f (pattern file)
-  formulae_to_process=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names") | while read -r name; do
-    # Restore full information (name;version) for matching formulae
-    echo "$outdated_formulae" | grep "^${name};"
+  packages_to_process=$(grep -v -x -f "$ignored_file" <(echo -e "$outdated_names") | while read -r name; do
+    # Restore full information (name;version) for matching packages
+    echo -e "$outdated_formulae" | grep "^${name};"
   done)
 
-  if [ -z "$formulae_to_process" ]; then
-    echo "✅ All outdated formulae are on the ignore list. No reports to generate."
+  if [ -z "$packages_to_process" ]; then
+    echo "✅ All outdated packages are on the ignore list. No reports to generate."
     exit 0
   fi
 
   local out_dir="reports_$(date +"%Y-%m-%d_%H:%M:%S")"
   mkdir -p "$out_dir"
-  echo "-i- Reports will be saved in directory: $out_dir"
+  echo "📂 Reports will be saved in directory: $out_dir"
 
   while IFS=';' read -r name installed_version; do
     local sanitized_name
@@ -208,7 +252,7 @@ main() {
     local filename="$out_dir/${sanitized_name}_from_${installed_version}.md"
     
     generate_update_report "$name" "$installed_version" "$filename"
-  done <<< "$formulae_to_process"
+  done <<< "$packages_to_process"
 
   echo "--------------------------------------------------"
   echo "🏁 All operations completed."
