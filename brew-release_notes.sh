@@ -1,44 +1,44 @@
 2#!/bin/bash
 
-# Ustawia tryb "fail-fast" dla niezdefiniowanych zmiennych i błędów w potoku.
+# Sets "fail-fast" mode for undefined variables and pipeline errors.
 set -uo pipefail
 
-# --- Główne Funkcje ---
+# --- Main Functions ---
 
-# Wyświetla instrukcję użycia skryptu.
+# Displays the script usage instructions.
 usage() {
   cat << EOF
-Użycie: $(basename "$0")
+Usage: $(basename "$0")
 
-Ten skrypt sprawdza, które z zainstalowanych formuł Homebrew są nieaktualne,
-pozwala interaktywnie zarządzać listą ignorowanych formuł, a następnie
-dla pozostałych generuje raport w formacie Markdown. Raport zawiera notatki
-z wydań (release notes).
+This script checks which installed Homebrew formulae are outdated,
+allows interactive management of the ignored formulae list, and then
+generates Markdown reports for the remaining ones. The report contains
+release notes.
 
-Wymagania:
+Requirements:
   - Homebrew (brew)
   - GitHub CLI (gh)
   - jq
   - gum (https://github.com/charmbracelet/gum)
 
-Plik z ignorowanymi formułami: 'ignored_formulae.txt'.
-Wyniki są zapisywane w nowym katalogu o nazwie 'raporty_YYYYMMDD_HHMMSS'.
+Ignored formulae file: 'ignored_formulae.txt'.
+Results are saved in a new directory named 'reports_YYYYMMDD_HHMMSS'.
 EOF
 }
 
-# Sprawdza, czy wszystkie wymagane narzędzia (brew, gh, jq, gum) są zainstalowane.
+# Checks if all required tools (brew, gh, jq, gum) are installed.
 check_dependencies() {
   local missing_deps=0
   for cmd in brew gh jq gum; do
     if ! command -v "$cmd" &>/dev/null; then
-      echo "⛔ BŁĄD: Wymagane narzędzie '$cmd' nie jest zainstalowane." >&2
+      echo "⛔ ERROR: Required tool '$cmd' is not installed." >&2
       missing_deps=1
     fi
   done
   [ "$missing_deps" -eq 1 ] && exit 1
 }
 
-# Pobiera ścieżkę do repozytorium GitHub na podstawie nazwy formuły.
+# Gets the GitHub repository path based on the formula name.
 get_repo_path() {
   local formula="$1"
   local formula_info
@@ -59,35 +59,35 @@ get_repo_path() {
     echo "$repo_path"
     return 0
   else
-    echo "⚠️ OSTRZEŻENIE: Nie udało się automatycznie ustalić repozytorium GitHub dla '$formula'." >&2
-    echo "   - Sprawdzony homepage: $homepage_url" >&2
-    echo "   - Sprawdzony stable URL: $stable_url" >&2
+    echo "⚠️ WARNING: Could not automatically determine GitHub repository for '$formula'." >&2
+    echo "   - Checked homepage: $homepage_url" >&2
+    echo "   - Checked stable URL: $stable_url" >&2
     return 1
   fi
 }
 
-# Generuje raport zmian w formacie Markdown dla pojedynczej formuły.
+# Generates a Markdown changelog report for a single formula.
 generate_update_report() {
   local formula="$1"
   local installed_version="$2"
   local output_file="$3"
 
   echo "--------------------------------------------------"
-  echo "🔎 Przetwarzanie formuły: $formula (wersja: $installed_version)"
+  echo "🔎 Processing formula: $formula (version: $installed_version)"
 
   local repo_path
   if ! repo_path=$(get_repo_path "$formula"); then
-    echo "↪️  Pominięto generowanie raportu dla '$formula'."
+    echo "↪️  Skipped report generation for '$formula'."
     return
   fi
-  echo "📦 Repozytorium GitHub: $repo_path"
+  echo "📦 GitHub repository: $repo_path"
 
-  echo "📡 Pobieranie listy wersji z GitHub..."
+  echo "📡 Fetching version list from GitHub..."
   local all_tags
   all_tags=$(gh release list --repo "$repo_path" --limit 200 --json tagName,isPrerelease --jq '.[] | select(.isPrerelease | not) | .tagName')
 
   if [ -z "$all_tags" ]; then
-    echo "⚠️ OSTRZEŻENIE: Nie znaleziono żadnych wydań w repozytorium '$repo_path'."
+    echo "⚠️ WARNING: No releases found in repository '$repo_path'."
     return
   fi
 
@@ -95,21 +95,21 @@ generate_update_report() {
   versions_to_fetch=$(printf "%s\n%s" "$installed_version" "$all_tags" | sed 's/^v//' | sort -V | uniq | awk -v ver="$installed_version" '$0 == ver {p=1; next} p')
 
   if [ -z "$versions_to_fetch" ]; then
-    echo "🎉 Formuła '$formula' jest aktualna. Nie ma potrzeby generowania raportu."
+    echo "🎉 Formula '$formula' is up to date. No need to generate a report."
     return
   fi
   
   local versions_count
   versions_count=$(echo "$versions_to_fetch" | wc -l | xargs)
-  echo "✨ Znaleziono $versions_count nowszych wersji. Generowanie raportu..."
+  echo "✨ Found $versions_count newer versions. Generating report..."
 
-  # --- Generowanie pliku Markdown ---
+  # --- Generating Markdown file ---
   {
-    echo "# Raport aktualizacji dla: \`$formula\`"
+    echo "# Update Report for: \`$formula\`"
     echo ""
-    echo "**Wygenerowano:** $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "**Generated:** $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
-    echo "Raport obejmuje zmiany od Twojej zainstalowanej wersji **$installed_version**."
+    echo "Report covers changes from your installed version **$installed_version**."
     echo ""
   } > "$output_file"
 
@@ -118,20 +118,20 @@ generate_update_report() {
     original_tag=$(echo "$all_tags" | grep -E "^v?${version}$" | head -n 1)
 
     if [ -z "$original_tag" ]; then
-      echo "⚠️ Nie można znaleźć oryginalnego tagu dla wersji '$version'."
+      echo "⚠️ Cannot find original tag for version '$version'."
       continue
     fi
     
-    echo "    - Pobieranie notatek dla wersji $original_tag..."
+    echo "    - Fetching notes for version $original_tag..."
     local release_notes
     release_notes=$(gh release view "$original_tag" --repo "$repo_path" --json body --jq '.body')
 
     {
       echo "---"
-      echo "## 🏷️ Wersja: $original_tag"
+      echo "## 🏷️ Version: $original_tag"
       echo ""
       if [ -z "$release_notes" ]; then
-        echo "*Brak notatek z wydania dla tej wersji.*"
+        echo "*No release notes available for this version.*"
       else
         echo "$release_notes"
       fi
@@ -139,10 +139,10 @@ generate_update_report() {
     } >> "$output_file"
   done < <(echo "$versions_to_fetch" | sort -Vr)
 
-  echo "✅ Gotowe! Raport został zapisany w pliku: $output_file"
+  echo "✅ Done! Report saved to file: $output_file"
 }
 
-# --- Główna Logika Skryptu ---
+# --- Main Script Logic ---
 main() {
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
@@ -154,66 +154,66 @@ main() {
   local ignored_file="ignored_formulae.txt"
   touch "$ignored_file"
 
-  echo "-i- Sprawdzanie nieaktualnych formuł Homebrew..."
+  echo "-i- Checking outdated Homebrew formulae..."
   local outdated_formulae
   outdated_formulae=$(brew outdated --formulae --json | jq -r '.formulae[] | "\(.name);\(.installed_versions[0])"')
 
   if [ -z "$outdated_formulae" ]; then
-    echo "🎉 Wszystkie formuły Homebrew są aktualne. Gratulacje!"
+    echo "🎉 All Homebrew formulae are up to date. Congratulations!"
     exit 0
   fi
 
-  # Wyodrębniamy same nazwy formuł, aby porównać je z listą ignorowanych
+  # Extract formula names only to compare with ignored list
   local outdated_names
   outdated_names=$(echo "$outdated_formulae" | cut -d';' -f1)
 
-  # Filtrujemy, aby znaleźć formuły, które nie są jeszcze ignorowane
+  # Filter to find formulae that are not yet ignored
   local candidates_to_ignore
   candidates_to_ignore=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names"))
 
   if [ -n "$candidates_to_ignore" ]; then
-    echo "-i- Znaleziono nieaktualne formuły, których nie ma na liście ignorowanych."
+    echo "-i- Found outdated formulae not on the ignore list."
     local newly_ignored
-    # Używamy gum do interaktywnego wyboru
-    newly_ignored=$(gum choose --no-limit --header "Wybierz formuły, które chcesz dodać do listy ignorowanych:" <<< "$candidates_to_ignore")
+    # Use gum for interactive selection
+    newly_ignored=$(gum choose --no-limit --header "Select formulae to add to the ignore list:" <<< "$candidates_to_ignore")
     
     if [ -n "$newly_ignored" ]; then
       echo "$newly_ignored" >> "$ignored_file"
-      # Sortujemy i usuwamy duplikaty, aby utrzymać porządek w pliku
+      # Sort and remove duplicates to maintain file order
       sort -u -o "$ignored_file" "$ignored_file"
-      echo "✅ Zaktualizowano plik '$ignored_file'."
+      echo "✅ Updated file '$ignored_file'."
     fi
   fi
   
-  # Filtrujemy ostateczną listę formuł do przetworzenia
+  # Filter final list of formulae to process
   local formulae_to_process
-  # Używamy `grep` z opcją -v (odwrócenie), -x (całe linie), -f (plik ze wzorcami)
+  # Use `grep` with -v (invert), -x (whole lines), -f (pattern file)
   formulae_to_process=$(grep -v -x -f "$ignored_file" <(echo "$outdated_names") | while read -r name; do
-    # Przywracamy pełne informacje (nazwa;wersja) dla pasujących formuł
+    # Restore full information (name;version) for matching formulae
     echo "$outdated_formulae" | grep "^${name};"
   done)
 
   if [ -z "$formulae_to_process" ]; then
-    echo "✅ Wszystkie nieaktualne formuły znajdują się na liście ignorowanych. Brak raportów do wygenerowania."
+    echo "✅ All outdated formulae are on the ignore list. No reports to generate."
     exit 0
   fi
 
-  local out_dir="raporty_$(date +"%Y%m%d_%H%M%S")"
+  local out_dir="reports_$(date +"%Y%m%d_%H%M%S")"
   mkdir -p "$out_dir"
-  echo "-i- Raporty zostaną zapisane w katalogu: $out_dir"
+  echo "-i- Reports will be saved in directory: $out_dir"
 
   while IFS=';' read -r name installed_version; do
     local sanitized_name
     sanitized_name=$(echo "$name" | tr '/' '-')
-    local filename="$out_dir/${sanitized_name}_od_${installed_version}.md"
+    local filename="$out_dir/${sanitized_name}_from_${installed_version}.md"
     
     generate_update_report "$name" "$installed_version" "$filename"
   done <<< "$formulae_to_process"
 
   echo "--------------------------------------------------"
-  echo "🏁 Wszystkie operacje zakończone."
+  echo "🏁 All operations completed."
 }
 
-# Uruchomienie głównej funkcji skryptu z przekazaniem wszystkich argumentów.
+# Run the main script function with all arguments passed through.
 main "$@"
 
